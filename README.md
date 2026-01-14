@@ -1,62 +1,171 @@
-# wine-tkg-build
+## INTRODUCTION
 
-configure wine-tkg and compile &amp; releases wine-tkg
+Wine is a program which allows running Microsoft Windows programs
+(including DOS, Windows 3.x, Win32, and Win64 executables) on Unix.
+It consists of a program loader which loads and executes a Microsoft
+Windows binary, and a library (called Winelib) that implements Windows
+API calls using their Unix, X11 or Mac equivalents.  The library may also
+be used for porting Windows code into native Unix executables.
 
-由于社区进展缓慢：
+Wine is free software, released under the GNU LGPL; see the file
+LICENSE for the details.
 
-- 对于 **10.17+** 的版本，不得不停止 esync 与 fsync 支持。Wine 现已可在高版本内核上加载 ntsync 支持。
-- 对于 **10.16+** 的版本，停止构建支持 Proton winevulkan 与 mf 的移植支持。
-- Proton 10-3 进度放缓，因去 Steam 补丁进展缓慢。
-- 不再对高版本 Wine 的编译完成版本在 Termux 上进行测试，NumBox 项目更新暂时停止，且未能找到方便测试的环境。
 
-# Release
+## QUICK START
 
-wineVer-N
+From the top-level directory of the Wine source (which contains this file),
+run:
 
-N代表第N次编译
-
-wine-wineVer-[mfdxgi]-N-tkg-stg-ge.tar.xz
-
-现在对于只应用wine_do_not_create_dxgi_device_manager.patch的版本，命名为,mfdxgi
-
-文件名过长的问题也进行解决,stg代表staging补丁已经应用
-
-# TkG
-
-customization.cfg:
-```bash
-_proton_battleye_support="false"
-
-_proton_eac_support="false"
-
-_GE_WAYLAND="false"
-
-_mk11_fix="false"
-
-_proton_fs_hack="true"
-
-_msvcrt_nativebuiltin="true"
-
-_win10_default="true"
+```
+./configure
+make
 ```
 
-advanced-customization.cfg:
+Then either install Wine:
 
-```bash
-# Custom GCC flags to use instead of system-wide makepkg flags set in /etc/makepkg.conf. Default is "-pipe -O2 -ftree-vectorize". Don't use -march=native if you want to share your builds accross different machines!
-_GCC_FLAGS="-O3 -pipe -msse3 -mfpmath=sse -ftree-vectorize -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types"
-# Custom LD flags to use instead of system-wide makepkg flags set in /etc/makepkg.conf. Default is "-pipe -O2 -ftree-vectorize".
-_LD_FLAGS="-Wl,-O3,--sort-common,--as-needed"
-# Same as _GCC_FLAGS but for cross-compiled binaries.
-_CROSS_FLAGS="-O3 -pipe -msse3 -mfpmath=sse -ftree-vectorize -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types"
-# Same as _LD_FLAGS but for cross-compiled binaries.
-_CROSS_LD_FLAGS="-Wl,-O3,--sort-common,--as-needed"
-
-_NOLIB32="wow64"
+```
+make install
 ```
 
-# Thanks
+Or run Wine directly from the build directory:
 
-- [wine-tkg-git](https://github.com/Frogging-Family/wine-tkg-git)
+```
+./wine notepad
+```
 
-- [proton wine](https://github.com/ValveSoftware/wine/tree)
+Run programs as `wine program`. For more information and problem
+resolution, read the rest of this file, the Wine man page, and
+especially the wealth of information found at https://www.winehq.org.
+
+
+## REQUIREMENTS
+
+To compile and run Wine, you must have one of the following:
+
+- Linux version 2.6.22 or later
+- FreeBSD 12.4 or later
+- Solaris x86 9 or later
+- NetBSD-current
+- macOS 10.12 or later
+
+As Wine requires kernel-level thread support to run, only the operating
+systems mentioned above are supported.  Other operating systems which
+support kernel threads may be supported in the future.
+
+**FreeBSD info**:
+  See https://wiki.freebsd.org/Wine for more information.
+
+**Solaris info**:
+  You will most likely need to build Wine with the GNU toolchain
+  (gcc, gas, etc.). Warning : installing gas does *not* ensure that it
+  will be used by gcc. Recompiling gcc after installing gas or
+  symlinking cc, as and ld to the gnu tools is said to be necessary.
+
+**NetBSD info**:
+  Make sure you have the USER_LDT, SYSVSHM, SYSVSEM, and SYSVMSG options
+  turned on in your kernel.
+
+**macOS info**:
+  You need Xcode/Xcode Command Line Tools or Apple cctools.  The
+  minimum requirements for compiling Wine are clang 3.8 with the
+  MacOSX10.13.sdk and mingw-w64 v12 for 32-bit wine.  The
+  MacOSX10.14.sdk and later can build 64-bit wine.
+
+**Supported file systems**:
+  Wine should run on most file systems. A few compatibility problems
+  have also been reported using files accessed through Samba. Also,
+  NTFS does not provide all the file system features needed by some
+  applications.  Using a native Unix file system is recommended.
+
+**Basic requirements**:
+  You need to have the X11 development include files installed
+  (called xorg-dev in Debian and libX11-devel in Red Hat).
+  Of course you also need make (most likely GNU make).
+  You also need flex version 2.5.33 or later and bison.
+
+**Optional support libraries**:
+  Configure will display notices when optional libraries are not found
+  on your system. See https://gitlab.winehq.org/wine/wine/-/wikis/Building-Wine
+  for hints about the packages you should install. On 64-bit
+  platforms, you have to make sure to install the 32-bit versions of
+  these libraries.
+
+
+## COMPILATION
+
+To build Wine, do:
+
+```
+./configure
+make
+```
+
+This will build the program "wine" and numerous support libraries/binaries.
+The program "wine" will load and run Windows executables.
+The library "libwine" ("Winelib") can be used to compile and link
+Windows source code under Unix.
+
+To see compile configuration options, do `./configure --help`.
+
+For more information, see https://gitlab.winehq.org/wine/wine/-/wikis/Building-Wine
+
+
+## SETUP
+
+Once Wine has been built correctly, you can do `make install`; this
+will install the wine executable and libraries, the Wine man page, and
+other needed files.
+
+Don't forget to uninstall any conflicting previous Wine installation
+first.  Try either `dpkg -r wine` or `rpm -e wine` or `make uninstall`
+before installing.
+
+Once installed, you can run the `winecfg` configuration tool. See the
+Support area at https://www.winehq.org/ for configuration hints.
+
+
+## RUNNING PROGRAMS
+
+When invoking Wine, you may specify the entire path to the executable,
+or a filename only.
+
+For example, to run Notepad:
+
+```
+wine notepad            (using the search Path as specified in
+wine notepad.exe         the registry to locate the file)
+
+wine c:\\windows\\notepad.exe      (using DOS filename syntax)
+
+wine ~/.wine/drive_c/windows/notepad.exe  (using Unix filename syntax)
+
+wine notepad.exe readme.txt          (calling program with parameters)
+```
+
+Wine is not perfect, so some programs may crash. If that happens you
+will get a crash log that you should attach to your report when filing
+a bug.
+
+
+## GETTING MORE INFORMATION
+
+- **WWW**: A great deal of information about Wine is available from WineHQ at
+	https://www.winehq.org/ : various Wine Guides, application database,
+	bug tracking. This is probably the best starting point.
+
+- **FAQ**: The Wine FAQ is located at https://gitlab.winehq.org/wine/wine/-/wikis/FAQ
+
+- **Wiki**: The Wine Wiki is located at https://gitlab.winehq.org/wine/wine/-/wikis/
+
+- **Gitlab**: Wine development is hosted at https://gitlab.winehq.org
+
+- **Mailing lists**:
+	There are several mailing lists for Wine users and developers; see
+	https://gitlab.winehq.org/wine/wine/-/wikis/Forums for more
+	information.
+
+- **Bugs**: Report bugs to Wine Bugzilla at https://bugs.winehq.org
+	Please search the bugzilla database to check whether your
+	problem is already known or fixed before posting a bug report.
+
+- **IRC**: Online help is available at channel `#WineHQ` on irc.libera.chat.
