@@ -490,40 +490,24 @@ BOOL X11DRV_ProcessEvents( DWORD mask )
     if (data->current_event) mask = 0;  /* don't process nested events */
 
     prev_event.type = 0;
-    while (XCheckIfEvent( data->display, &event, filter_event, (XPointer)(UINT_PTR)mask ))
+    for (;;)
     {
-        count++;
-        if (XFilterEvent( &event, None ))
+        if (!XCheckIfEvent( data->display, &event, filter_event, (XPointer)(UINT_PTR)mask ))
         {
-            /*
-             * SCIM on linux filters key events strangely. It does not filter the
-             * KeyPress events for these keys however it does filter the
-             * KeyRelease events. This causes wine to become very confused as
-             * to the keyboard state.
-             *
-             * We need to let those KeyRelease events be processed so that the
-             * keyboard state is correct.
-             */
-            if (event.type == KeyRelease)
-            {
-                KeySym keysym = 0;
-                XKeyEvent *keyevent = &event.xkey;
+            if (!prev_event.type) break;
+            call_event_handler( data->display, &prev_event );
+            free_event_data( &prev_event );
 
-                XLookupString(keyevent, NULL, 0, &keysym, NULL);
-                if (!(keysym == XK_Shift_L ||
-                    keysym == XK_Shift_R ||
-                    keysym == XK_Control_L ||
-                    keysym == XK_Control_R ||
-                    keysym == XK_Alt_R ||
-                    keysym == XK_Alt_L ||
-                    keysym == XK_Meta_R ||
-                    keysym == XK_Meta_L))
-                        continue; /* not a key we care about, ignore it */
-            }
-            else
-                continue;  /* filtered, ignore it */
+            /* Retry after processing delayed event, more events might have been read from the pipe,
+             * this is the case for instance with synchronous requests like when reading a property.
+             */
+            action = MERGE_DISCARD;
+            prev_event.type = 0;
+            continue;
         }
 
+        count++;
+        if (XFilterEvent( &event, None )) continue;
         if (host_window_filter_event( &event, &prev_event )) continue;
 
         get_event_data( &event );
@@ -545,8 +529,7 @@ BOOL X11DRV_ProcessEvents( DWORD mask )
             break;
         }
     }
-    if (prev_event.type) call_event_handler( data->display, &prev_event );
-    free_event_data( &prev_event );
+
     XFlush( gdi_display );
     if (count) TRACE( "processed %d events\n", count );
 
@@ -616,6 +599,7 @@ static inline BOOL can_activate_window( HWND hwnd )
     if (style & WS_MINIMIZE) return FALSE;
     if (NtUserGetWindowLongW( hwnd, GWL_EXSTYLE ) & WS_EX_NOACTIVATE) return FALSE;
     if (hwnd == NtUserGetDesktopWindow()) return FALSE;
+    if (NtUserGetPresentRect( hwnd, &rect, 0 )) return TRUE;
     if (NtUserGetWindowRect( hwnd, &rect, NtUserGetDpiForWindow( hwnd ) ) && IsRectEmpty( &rect )) return FALSE;
     return !(style & WS_DISABLED);
 }

@@ -143,7 +143,6 @@ struct context
     GLubyte *extensions;           /* extension string */
     char *wow64_version;           /* wow64 GL version override */
     struct buffers *buffers;       /* wow64 buffers map */
-    GLenum gl_error;               /* wrapped GL error */
     const char **extension_array;  /* array of supported extensions */
     size_t extension_count;        /* size of supported extensions */
     BOOL use_pinned_memory;        /* use GL_AMD_pinned_memory to emulate persistent maps */
@@ -816,6 +815,15 @@ static BOOL is_any_extension_supported( struct context *ctx, const char *extensi
     return FALSE;
 }
 
+static void set_gl_error( TEB *teb, GLenum error )
+{
+    const struct opengl_funcs *funcs = teb->glTable;
+    struct context *ctx;
+
+    if (!(ctx = get_current_context( teb, NULL, NULL )) || ctx->base.error) return;
+    if (!(ctx->base.error = funcs->p_glGetError())) ctx->base.error = error;
+}
+
 static BOOL get_default_fbo_integer( struct context *ctx, struct opengl_drawable *draw, struct opengl_drawable *read,
                                      GLenum pname, GLint *data )
 {
@@ -855,7 +863,11 @@ static BOOL get_integer( TEB *teb, GLenum pname, GLint *data )
     struct opengl_drawable *draw, *read;
     struct context *ctx;
 
-    if (!(ctx = get_current_context( teb, &draw, &read ))) return FALSE;
+    if (!(ctx = get_current_context( teb, &draw, &read )))
+    {
+        set_gl_error( teb, GL_INVALID_OPERATION );
+        return FALSE;
+    }
 
     switch (pname)
     {
@@ -888,12 +900,12 @@ const GLubyte *wrap_glGetString( TEB *teb, GLenum name )
 
     if ((ret = funcs->p_glGetString( name )))
     {
-        if (name == GL_VENDOR)
+        if (name == GL_VENDOR && funcs->p_wglQueryCurrentRendererStringWINE)
         {
             const char *vendor = funcs->p_wglQueryCurrentRendererStringWINE( WGL_RENDERER_VENDOR_ID_WINE );
             return vendor ? (const GLubyte *)vendor : ret;
         }
-        if (name == GL_RENDERER)
+        if (name == GL_RENDERER && funcs->p_wglQueryCurrentRendererStringWINE)
         {
             const char *renderer = funcs->p_wglQueryCurrentRendererStringWINE( WGL_RENDERER_DEVICE_ID_WINE );
             return renderer ? (const GLubyte *)renderer : ret;
@@ -1432,16 +1444,18 @@ static void flush_context( TEB *teb, void (*flush)(void) )
     struct opengl_drawable *read, *draw;
     struct context *ctx = get_current_context( teb, &read, &draw );
     const struct opengl_funcs *funcs = teb->glTable;
-    BOOL force_swap = flush && ctx && !ctx->draw_fbo && context_draws_front( ctx ) &&
-                      draw->buffer_map[0] == GL_BACK_LEFT && draw->client;
+    UINT flags = 0;
 
-    if (!ctx || !funcs->p_wgl_context_flush( &ctx->base, flush, force_swap ))
+    if (flush && ctx && !ctx->draw_fbo && context_draws_front( ctx ) && draw->client) flags |= GL_FLUSH_PRESENT;
+    if ((flags & GL_FLUSH_PRESENT) && draw->buffer_map[0] == GL_BACK_LEFT) flags |= GL_FLUSH_FORCE_SWAP;
+
+    if (!ctx || !funcs->p_wgl_context_flush( &ctx->base, flush, flags ))
     {
         /* default implementation: call the functions directly */
         if (flush) flush();
     }
 
-    if (force_swap)
+    if (flags & GL_FLUSH_FORCE_SWAP)
     {
         GLenum mask = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
         RECT rect;
@@ -1876,7 +1890,12 @@ static GLenum *set_default_fbo_draw_buffers( struct context *ctx, struct opengl_
     for (GLsizei i = 0; i < count; i++)
     {
         dst[i] = drawable_buffer_from_buffer( draw, src[i] );
-        if (src[i] && !dst[i]) WARN( "Invalid draw buffer #%d %#x for context %p\n", i, src[i], ctx );
+        if (src[i] && !dst[i])
+        {
+            WARN( "Invalid draw buffer #%d %#x for context %p\n", i, src[i], ctx );
+            dst[i] = src[i];
+            continue;
+        }
 
         if (i >= MAX_DRAW_BUFFERS) FIXME( "Needs %u draw buffers\n", i );
         else ctx->color_buffer.draw_buffers[i] = src[i];
@@ -1927,7 +1946,11 @@ void wrap_glNamedFramebufferDrawBuffers( TEB *teb, GLuint fbo, GLsizei n, const 
 static GLenum set_default_fbo_draw_buffer( struct context *ctx, struct opengl_drawable *draw, GLint src )
 {
     GLenum dst = drawable_buffer_from_buffer( draw, src );
-    if (src && !dst) WARN( "Invalid draw buffer %#x for context %p\n", src, ctx );
+    if (src && !dst)
+    {
+        WARN( "Invalid draw buffer %#x for context %p\n", src, ctx );
+        return src;
+    }
     memset( ctx->color_buffer.draw_buffers, 0, sizeof(ctx->color_buffer.draw_buffers) );
     ctx->color_buffer.draw_buffers[0] = src;
     return dst;
@@ -1972,7 +1995,11 @@ void wrap_glNamedFramebufferDrawBuffer( TEB *teb, GLuint fbo, GLenum buf )
 static GLenum set_default_fbo_read_buffer( struct context *ctx, struct opengl_drawable *read, GLint src )
 {
     GLenum dst = drawable_buffer_from_buffer( read, src );
-    if (src && !dst) WARN( "Invalid read buffer %#x for context %p\n", src, ctx );
+    if (src && !dst)
+    {
+        WARN( "Invalid read buffer %#x for context %p\n", src, ctx );
+        return src;
+    }
     ctx->pixel_mode.read_buffer = src;
     return dst;
 }
@@ -2017,7 +2044,7 @@ void wrap_glGetIntegerv( TEB *teb, GLenum pname, GLint *data )
 {
     const struct opengl_funcs *funcs = teb->glTable;
     if (get_integer( teb, pname, data )) return;
-    funcs->p_glGetIntegerv( pname, data );
+    else funcs->p_glGetIntegerv( pname, data );
 }
 
 void wrap_glGetBooleanv( TEB *teb, GLenum pname, GLboolean *data )
@@ -2033,7 +2060,7 @@ void wrap_glGetDoublev( TEB *teb, GLenum pname, GLdouble *data )
     const struct opengl_funcs *funcs = teb->glTable;
     GLint value;
     if (get_integer( teb, pname, &value )) *data = value;
-    funcs->p_glGetDoublev( pname, data );
+    else funcs->p_glGetDoublev( pname, data );
 }
 
 void wrap_glGetFloatv( TEB *teb, GLenum pname, GLfloat *data )
@@ -2064,6 +2091,19 @@ void wrap_glGetFramebufferParameterivEXT( TEB *teb, GLuint fbo, GLenum pname, GL
     funcs->p_glGetFramebufferParameterivEXT( fbo, pname, params );
 }
 
+GLenum wrap_glGetError( TEB *teb )
+{
+    const struct opengl_funcs *funcs = teb->glTable;
+    GLenum error, wrapped;
+    struct wgl_context *ctx;
+
+    if (!(ctx = &get_current_context( teb, NULL, NULL )->base)) return GL_INVALID_OPERATION;
+    error = funcs->p_glGetError();
+    wrapped = ctx->error;
+    ctx->error = GL_NO_ERROR;
+    return wrapped ? wrapped : error;
+}
+
 NTSTATUS process_attach( void *args )
 {
     struct process_attach_params *params = args;
@@ -2075,6 +2115,7 @@ NTSTATUS process_attach( void *args )
         NtQuerySystemInformation( SystemEmulationBasicInformation, &info, sizeof(info), NULL );
         zero_bits = (ULONG_PTR)info.HighestUserAddress | 0x7fffffff;
     }
+
     return STATUS_SUCCESS;
 }
 
@@ -2159,28 +2200,6 @@ NTSTATUS return_wow64_string( const void *str, PTR32 *wow64_str )
     if (*wow64_str) return STATUS_SUCCESS;
     *wow64_str = strlen( str ) + 1;
     return STATUS_BUFFER_TOO_SMALL;
-}
-
-GLenum wow64_glGetError( TEB *teb )
-{
-    const struct opengl_funcs *funcs = teb->glTable;
-    GLenum gl_err, prev_err;
-    struct context *ctx;
-
-    if (!(ctx = get_current_context( teb, NULL, NULL ))) return GL_INVALID_OPERATION;
-    gl_err = funcs->p_glGetError();
-    prev_err = ctx->gl_error;
-    ctx->gl_error = GL_NO_ERROR;
-    return prev_err ? prev_err : gl_err;
-}
-
-static void set_gl_error( TEB *teb, GLenum gl_error )
-{
-    const struct opengl_funcs *funcs = teb->glTable;
-    struct context *ctx;
-
-    if (!(ctx = get_current_context( teb, NULL, NULL )) || ctx->gl_error) return;
-    if (!(ctx->gl_error = funcs->p_glGetError())) ctx->gl_error = gl_error;
 }
 
 static struct wgl_handle *get_sync_ptr( TEB *teb, GLsync sync )

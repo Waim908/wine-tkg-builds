@@ -48,9 +48,13 @@ extern struct opengl_funcs null_opengl_funcs;
 
 static inline const struct opengl_funcs *get_dc_funcs( HDC hdc )
 {
-    const struct opengl_funcs *funcs = __wine_get_wgl_driver( hdc, WINE_OPENGL_DRIVER_VERSION, &null_opengl_funcs );
-    if (!funcs) RtlSetLastWin32Error( ERROR_INVALID_HANDLE );
-    return funcs;
+    DWORD has_opengl;
+
+    if (NtGdiGetDCDword( hdc, NtGdiHasOpenGL, &has_opengl ) && has_opengl)
+        return __wine_get_opengl_driver( WINE_OPENGL_DRIVER_VERSION );
+
+    RtlSetLastWin32Error( ERROR_INVALID_HANDLE );
+    return &null_opengl_funcs;
 }
 
 #ifdef _WIN64
